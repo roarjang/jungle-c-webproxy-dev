@@ -1,19 +1,12 @@
-#include <unistd.h>             // read, write, ssize_t
-#include <sys/types.h>          // size_t, ssize_t
-#include <errno.h>              // errno, EINTR
-#include <string.h>             // strerror()
-#include <stdio.h>              // printf, perror 등
-
-#define RIO_BUFSIZE 8192
-
-typedef struct {
-    int rio_fd;                 // 연결된 fd
-    int rio_cnt;                // 내부 버퍼에 남은 바이트 수
-    char *rio_buf_ptr;          // 내부 버퍼에서 현재 읽는 위치
-    char rio_buf[RIO_BUFSIZE];  // 내부 버퍼
-} rio_t;
+#include "rio.h"
 
 /* Robust Input/Output Function Implement */
+void rio_init(rio_t *rp, int fd) {
+    rp->fd = fd;
+    rp->bytes_in_buf = 0;
+    rp->read_ptr = rp->internal_buf;
+}
+
 ssize_t rio_readn(int fd, void *usr_buf, size_t n) {
     size_t bytes_left = n;      // 아직 읽어야 할 바이트 수
     ssize_t bytes_read;         // 이번 read() 호출의 결과
@@ -44,7 +37,7 @@ ssize_t rio_readn(int fd, void *usr_buf, size_t n) {
     return (n - bytes_left);
 }
 
-ssize_t rio_writen(int fd, void *usr_buf, size_t n) {
+ssize_t rio_writen(int fd, const void *usr_buf, size_t n) {
     size_t bytes_left = n;          // 아직 써야 할 바이트 수
     ssize_t bytes_written;          // 이번 write() 호출의 결과
     const char *buf_ptr = usr_buf;  // 현재 쓰기 위치 포인터
@@ -73,32 +66,77 @@ ssize_t rio_writen(int fd, void *usr_buf, size_t n) {
     return (n - bytes_left);
 }
 
-ssize_t rio_read(rio_t *rp, char *usr_buf, size_t n) {
-    // 내부 버퍼가 비어 있으면 read()로 새로 채움
-    while (rp->rio_cnt <= 0) {
-        int rc = read(rp->rio_fd, rp->rio_buf_ptr, RIO_BUFSIZE);
+/*
+ * rio_read - 내부 버퍼를 사용하여 시스템 콜 호출을 최소화하고,
+ *            사용자 요청 바이트 수만큼 안정적으로 읽어오는 robust read 함수
+ */
+ssize_t rio_read(rio_t *rp, void *usr_buf, size_t n) {
+    size_t bytes_left = n;      // 아직 사용자에게 전달할 바이트 수
+    char *buf_p = usr_buf;      // 사용자 버퍼 포인터
 
-        if (rc < 0) {
-            if (errno == EINTR)
-                continue;       // 시그널로 중단 -> 다시 시도
-            else
-                return -1;      // 진짜 에러
-        } else if (rc == 0) {
-            return 0;           // EOF
+    while (bytes_left > 0) {
+        // 내부 버퍼가 비어 있으면 시스템 콜로 새로 채움
+        if (rp->bytes_in_buf <= 0) {
+            rp->bytes_in_buf = read(rp->fd, rp->internal_buf, RIO_BUF_SIZE);
+
+            if (rp->bytes_in_buf < 0) {
+                if (errno == EINTR)
+                    continue;       // 시그널로 인한 중단 -> 재시도
+                return -1;          // 그 외 read 에러
+            } else if (rp->bytes_in_buf == 0) {
+                break;              // EOF
+            }
+
+            rp->read_ptr = rp->internal_buf; // 버퍼 포인터 초기화
         }
 
-        rp->rio_cnt = rc;               // 버퍼에 새로 채운 바이트 수
-        rp->rio_buf_ptr = rp->rio_buf;   // 버퍼의 시작 위치로 초기화
+        // 내부 버퍼에서 복사할 수 있는 바이트 수 계산
+        size_t cnt = (bytes_left < (size_t)rp->bytes_in_buf) ? bytes_left : (size_t)rp->bytes_in_buf;
+
+        // 내부 버퍼 -> 사용자 버퍼로 복사
+        memcpy(usr_buf, rp->read_ptr, cnt);
+
+        // 상태 갱신
+        rp->read_ptr += cnt;
+        rp->bytes_in_buf -= cnt;
+        buf_p += cnt;
+        bytes_left -= cnt;
     }
 
-    // 내부 버퍼에서 사용자 버퍼로 최대 n바이트 복사
-    size_t cnt = n;
-    if (rp->rio_cnt < n)
-        cnt = rp->rio_cnt;
+    // 총 읽은 바이트 수 반환
+    return (n - bytes_left);
+}
 
-    memcpy(usr_buf, rp->rio_buf_ptr, cnt);
-    rp->rio_buf_ptr += cnt;
-    rp->rio_cnt -= cnt;
+ssize_t rio_readlineb(rio_t *rp, void *usr_buf, size_t max_len) {
+    // 최소한 '\0'을 담을 공간은 있어야 함
+    if (max_len < 2) {
+        if (max_len == 1)
+            ((char *)usr_buf)[0] = '\0';
+        return 0;
+    }
 
-    return cnt;
+    char *p = usr_buf;  // 사용자 버퍼 포인터
+    char c;             // 한 글자씩 임시 저장할 변수
+    ssize_t rc;         // rio_read의 반환값
+
+    // 최대 max_len - 1까지만 반복 (마지막은 '\0'용 공간)
+    while (p < (char *)usr_buf + max_len - 1) {
+        rc = rio_read(rp, &c, 1);  // 내부 버퍼에서 1바이트 읽기
+
+        if (rc == 1) {
+            *p++ = c;              // 사용자 버퍼에 복사 후 포인터 증가
+            if (c == '\n')         // 줄 끝이면 반복 종료
+                break;
+        } else if (rc == 0) {
+            // EOF: 아무것도 못 읽은 경우
+            if (p == (char *)usr_buf)
+                return 0;
+            break;  // 일부라도 읽었으면 종료
+        } else {
+            return -1;  // read 에러
+        }
+    }
+    *p = '\0';  // 문자열 종료 처리
+    
+    return p - (char *)usr_buf;  // 총 읽은 바이트 수 반환 (\0 제외)
 }

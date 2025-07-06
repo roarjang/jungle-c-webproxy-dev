@@ -1,0 +1,4 @@
+Hello, world!
+This is a test file.
+Each line should be read by rio_readlineb.
+Final line ends here.
