@@ -6,6 +6,7 @@
 #include <errno.h>      // errno, EINTR
 #include <string.h>     // memcpy, memset
 #include <stdio.h>      // printf, fprintf, perror (optional)
+#include <stdlib.h>
 
 #define RIO_BUF_SIZE 8192
 

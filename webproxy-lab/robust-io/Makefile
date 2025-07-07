@@ -2,17 +2,25 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g
 
-# 타겟 실행 파일
-TARGET = test_rio
+# 공통 소스
+RIO_SRC = rio_function.c
+RIO_OBJ = rio_function.o
 
-# 오브젝트 파일 목록
-OBJS = test_rio.o rio_function.o
+# 실행 대상
+TARGETS = test_rio echo_server tiny_server
 
-# 기본 빌드 명령어
-all: $(TARGET)
+# 기본 all 타겟
+all: $(TARGETS)
 
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS)
+# test_rio 빌드
+test_rio: test_rio.o $(RIO_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+echo_server: echo_server.o $(RIO_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+tiny_server: tiny_server.o $(RIO_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
 
 # .c -> .o 자동 규칙
 %.o: %.c
@@ -20,4 +28,4 @@ $(TARGET): $(OBJS)
 
 # 정리
 clean:
-	rm -f *.o $(TARGET)
+	rm -f *.o $(TARGETS)

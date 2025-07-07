@@ -17,5 +17,6 @@
                 "C_Cpp.default.compilerPath": "/usr/bin/gcc"
             }
         }
-    }
+    },
+    "forwardPorts": [8000]
 }
