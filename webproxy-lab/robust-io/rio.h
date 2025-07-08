@@ -17,6 +17,10 @@ typedef struct {
     char internal_buf[RIO_BUF_SIZE];    // 내부 버퍼         
 } rio_t;
 
+typedef struct {
+    int content_length;
+} request_header_info;
+
 // 초기화 함수
 void rio_init(rio_t *rp, int fd);
 
